@@ -116,7 +116,7 @@ chatGroup.get("/session/:id", async (c) => {
 chatGroup.post("/message/:sessionId", requestValidator, async (c) => {
   try {
     const sessionId = c.req.param("sessionId");
-    const { question, schema } = c.req.valid("json");
+    const { question } = c.req.valid("json");
 
     // Get or create session
     let session = chatSessions.get(sessionId);
@@ -134,7 +134,7 @@ chatGroup.post("/message/:sessionId", requestValidator, async (c) => {
     // Process the question
     console.log(`Processing question in session ${sessionId}: ${question}`);
 
-    const result = await analyzeStatisticalQuestion(question, schema);
+    const result = await analyzeStatisticalQuestion(question);
 
     // Add system response to history
     session.history.push({

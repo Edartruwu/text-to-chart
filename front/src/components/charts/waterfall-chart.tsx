@@ -257,5 +257,3 @@ const data = [
 
 <WaterfallChart data={data} />
 */
-
-
