@@ -4,6 +4,7 @@ import { validator } from "hono/validator";
 import { logger } from "hono/logger";
 import { analyzeStatisticalQuestion } from "../modules/dataAnal/getStatistic";
 import type { Statistics } from "../modules/dataAnal/getStatistic";
+import { invoices } from "../modules/invoices";
 
 interface ChatHistoryEntry {
   role: "user" | "system";
@@ -27,15 +28,7 @@ const app = new Hono();
 
 // Add middleware
 app.use("*", logger());
-app.use(
-  "*",
-  cors({
-    origin: "*", // In production, you should restrict this
-    allowHeaders: ["Content-Type", "Authorization"],
-    allowMethods: ["POST", "GET", "OPTIONS"],
-    maxAge: 86400,
-  }),
-);
+app.use(cors());
 
 // Validate the request
 const requestValidator = validator("json", (value, c) => {
@@ -222,6 +215,8 @@ app.get("/api/health", (c) => {
     timestamp: Date.now(),
   });
 });
+
+app.route("/api/invoices", invoices);
 
 // Clean up old sessions periodically (run every hour)
 setInterval(
