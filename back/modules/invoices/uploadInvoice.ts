@@ -1,5 +1,16 @@
 import pool from "../db/pool";
 
+interface PostgresError extends Error {
+  code?: string;
+  constraint?: string;
+  detail?: string;
+  schema?: string;
+  table?: string;
+  column?: string;
+  dataType?: string;
+  routine?: string;
+}
+
 /**
  * Custom error class for invoice-related operations
  */
@@ -182,6 +193,7 @@ function validateInvoiceData(data: NewInvoiceData): void {
  * @returns The inserted invoice with all its items
  * @throws {InvoiceError} If the insertion fails
  */
+
 export async function uploadInvoice(data: NewInvoiceData): Promise<Invoice> {
   // Validate the invoice data before attempting insertion
   validateInvoiceData(data);
@@ -189,6 +201,19 @@ export async function uploadInvoice(data: NewInvoiceData): Promise<Invoice> {
   const client = await pool.connect();
 
   try {
+    // First, check if the customer exists
+    const customerCheck = await client.query(
+      "SELECT id FROM customers WHERE id = $1",
+      [data.invoice.customer_id],
+    );
+
+    if (customerCheck.rowCount === 0) {
+      // Customer doesn't exist, throw a specific error
+      throw new InvoiceError(
+        `Customer with ID ${data.invoice.customer_id} does not exist`,
+      );
+    }
+
     // Start a transaction
     await client.query("BEGIN");
 
@@ -251,9 +276,29 @@ export async function uploadInvoice(data: NewInvoiceData): Promise<Invoice> {
       ...insertedInvoice,
       items: insertedItems,
     };
-  } catch (error) {
+  } catch (error: unknown) {
     // Rollback the transaction in case of error
     await client.query("ROLLBACK");
+
+    // Check if it's a Postgres error with a foreign key violation
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      "constraint" in error
+    ) {
+      const pgError = error as PostgresError;
+
+      // If it's a foreign key violation for customer_id, provide a specific message
+      if (
+        pgError.code === "23503" &&
+        pgError.constraint === "invoices_customer_id_fkey"
+      ) {
+        throw new InvoiceError(
+          "Customer not found. Please create this customer first.",
+        );
+      }
+    }
 
     // Rethrow with proper context
     if (error instanceof InvoiceError) {
@@ -266,8 +311,7 @@ export async function uploadInvoice(data: NewInvoiceData): Promise<Invoice> {
     client.release();
   }
 }
-
-/**
+/*
  * Example usage:
  *
  * const pool = new Pool({

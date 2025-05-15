@@ -5,6 +5,7 @@ import { logger } from "hono/logger";
 import { analyzeStatisticalQuestion } from "../modules/dataAnal/getStatistic";
 import type { Statistics } from "../modules/dataAnal/getStatistic";
 import { invoices } from "../modules/invoices";
+import { customers } from "../modules/customers/customerservice";
 
 interface ChatHistoryEntry {
   role: "user" | "system";
@@ -217,6 +218,7 @@ app.get("/api/health", (c) => {
 });
 
 app.route("/api/invoices", invoices);
+app.route("/api/customers", customers);
 
 // Clean up old sessions periodically (run every hour)
 setInterval(

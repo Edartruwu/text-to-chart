@@ -1,7 +1,7 @@
 "use client";
 
 import type React from "react";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { ExtractedInvoiceData, extractInvoiceData } from "@/server/openai";
 import { processPdfWithOcr } from "@/server/mistral";
 import { format, parse } from "date-fns";
@@ -50,6 +50,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { CreateCustomerDialog } from "./customer/createcustomer";
+import { CustomerSearch } from "./customer/searchcustomer";
 
 // Types
 interface BankDetails {
@@ -107,7 +109,7 @@ const PAYMENT_TERMS = [
   "End of Month",
 ];
 
-const API_URL = "http://localhost:3000/api/invoices";
+const API_URL = "http://localhost:3001/api/invoices";
 
 export function CreateInvoiceDialog() {
   const [open, setOpen] = useState(false);
@@ -149,6 +151,10 @@ export function CreateInvoiceDialog() {
   const [showBankDetails, setShowBankDetails] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("manual");
+  
+  // Customer dialog states
+  const [customerDialogOpen, setCustomerDialogOpen] = useState(false);
+  const [customerNotFoundId, setCustomerNotFoundId] = useState<number | null>(null);
 
   // OCR states
   const [isProcessingFile, setIsProcessingFile] = useState(false);
@@ -300,6 +306,113 @@ export function CreateInvoiceDialog() {
     await processFile(file);
   };
 
+  // Separate function for submitting the form without requiring an event
+  const submitInvoiceForm = useCallback(async () => {
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      // Basic validation
+      if (!invoiceData.invoice_number) {
+        throw new Error("Invoice number is required");
+      }
+
+      if (invoiceData.customer_id <= 0) {
+        throw new Error("Valid customer ID is required");
+      }
+
+      // Validate items
+      const hasValidItems = items.every(
+        (item) => item.description && item.quantity > 0,
+      );
+
+      if (!hasValidItems) {
+        throw new Error(
+          "All items must have a description and quantity greater than 0",
+        );
+      }
+
+      // Prepare data for submission
+      const submissionData: NewInvoiceData = {
+        invoice: {
+          ...invoiceData,
+          bank_details: showBankDetails ? bankDetails : null,
+        },
+        items: items.map((item) => ({
+          ...item,
+          description: item.description,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+        })),
+      };
+
+      // Submit to API
+      const response = await fetch(API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(submissionData),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        
+        // Check if it's a customer not found error
+        if (
+          response.status === 400 && 
+          errorData.error && 
+          (errorData.error.includes("Customer not found") || 
+           errorData.error.includes("customer_id") ||
+           errorData.error.includes("is not present in table \"customers\""))
+        ) {
+          // Store the customer ID that wasn't found
+          setCustomerNotFoundId(invoiceData.customer_id);
+          
+          // Open the customer creation dialog
+          setCustomerDialogOpen(true);
+          
+          // Set a user-friendly error
+          throw new Error("Customer not found. Please create this customer first.");
+        }
+        
+        throw new Error(errorData.error || "Failed to create invoice");
+      }
+
+      const createdInvoice = await response.json();
+
+      // Show success message
+      toast.success(
+        `Invoice #${createdInvoice.invoice_number} has been created.`,
+      );
+
+      // Close dialog and reset form
+      setOpen(false);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "An unexpected error occurred",
+      );
+
+      toast.error(err instanceof Error ? err.message : "An unexpected error occurred");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [invoiceData, items, showBankDetails, bankDetails, setCustomerNotFoundId, setCustomerDialogOpen]);
+
+  // Handle customer creation
+  const handleCustomerCreated = useCallback((customer: any) => {
+    // If we're creating a customer because it wasn't found during invoice creation
+    if (customerNotFoundId !== null && customerNotFoundId === invoiceData.customer_id) {
+      // The customer now exists, try to create the invoice again with a short delay
+      setTimeout(() => {
+        submitInvoiceForm();
+      }, 500);
+    }
+    
+    // Reset the not found ID
+    setCustomerNotFoundId(null);
+  }, [customerNotFoundId, invoiceData.customer_id, submitInvoiceForm]);
+
   // Process the selected file with OCR
   const processFile = async (file: File) => {
     setIsProcessingFile(true);
@@ -416,80 +529,10 @@ export function CreateInvoiceDialog() {
     return "bg-red-50 border-red-200";
   };
 
-  // Handle form submission
+  // Handle form submission from the UI form
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsSubmitting(true);
-    setError(null);
-
-    try {
-      // Basic validation
-      if (!invoiceData.invoice_number) {
-        throw new Error("Invoice number is required");
-      }
-
-      if (invoiceData.customer_id <= 0) {
-        throw new Error("Valid customer ID is required");
-      }
-
-      // Validate items
-      const hasValidItems = items.every(
-        (item) => item.description && item.quantity > 0,
-      );
-
-      if (!hasValidItems) {
-        throw new Error(
-          "All items must have a description and quantity greater than 0",
-        );
-      }
-
-      // Prepare data for submission
-      const submissionData: NewInvoiceData = {
-        invoice: {
-          ...invoiceData,
-          bank_details: showBankDetails ? bankDetails : null,
-        },
-        items: items.map((item) => ({
-          ...item,
-          // Ensure all items have the required fields
-          description: item.description,
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-        })),
-      };
-
-      // Submit to API
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(submissionData),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to create invoice");
-      }
-
-      const createdInvoice = await response.json();
-
-      // Show success message
-      toast.success(
-        `Invoice #${createdInvoice.invoice_number} has been created.`,
-      );
-
-      // Close dialog and reset form
-      setOpen(false);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "An unexpected error occurred",
-      );
-
-      toast.error("An unexpected error occurred");
-    } finally {
-      setIsSubmitting(false);
-    }
+    await submitInvoiceForm();
   };
 
   return (
@@ -637,22 +680,12 @@ export function CreateInvoiceDialog() {
                         htmlFor="review_customer_id"
                         className="text-sm font-medium"
                       >
-                        Customer ID
+                        Customer
                       </Label>
-                      <Input
-                        id="review_customer_id"
-                        type="number"
-                        value={invoiceData.customer_id || ""}
-                        onChange={(e) =>
-                          setInvoiceData((prev) => ({
-                            ...prev,
-                            customer_id:
-                              e.target.value === ""
-                                ? 0
-                                : Number.parseInt(e.target.value),
-                          }))
-                        }
-                        className={getConfidenceClass("customer_id")}
+                      <CustomerSearch 
+                        value={invoiceData.customer_id} 
+                        onChange={(id:number) => setInvoiceData(prev => ({ ...prev, customer_id: id }))}
+                        onCreateNew={() => setCustomerDialogOpen(true)}
                       />
                     </div>
                   </div>
@@ -941,17 +974,12 @@ export function CreateInvoiceDialog() {
 
                 <div className="space-y-2">
                   <Label htmlFor="customer_id" className="text-sm font-medium">
-                    Customer ID *
+                    Customer *
                   </Label>
-                  <Input
-                    id="customer_id"
-                    name="customer_id"
-                    type="number"
-                    min="1"
-                    value={invoiceData.customer_id || ""}
-                    onChange={handleInvoiceChange}
-                    placeholder="123"
-                    required
+                  <CustomerSearch 
+                    value={invoiceData.customer_id} 
+                    onChange={(id:number) => setInvoiceData(prev => ({ ...prev, customer_id: id }))}
+                    onCreateNew={() => setCustomerDialogOpen(true)}
                   />
                 </div>
               </div>
@@ -1336,6 +1364,16 @@ export function CreateInvoiceDialog() {
             </form>
           </TabsContent>
         </Tabs>
+
+        {/* Add the customer creation dialog */}
+        <CreateCustomerDialog
+          open={customerDialogOpen}
+          onOpenChange={setCustomerDialogOpen}
+          onCustomerCreated={handleCustomerCreated}
+          initialData={{ 
+            // Pre-fill with any customer info you might have
+          }}
+        />
       </DialogContent>
     </Dialog>
   );
